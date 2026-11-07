@@ -1,0 +1,8 @@
+# logs and transient files
+*.log
+/env_current.bin
+/tmp/
+
+# OS cruft
+.DS_Store
+Thumbs.db
