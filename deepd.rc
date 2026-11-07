@@ -1,0 +1,8 @@
+on property:sys.boot_completed=1
+	start deepd
+
+service deepd /system/bin/deepd.sh
+    class main
+    disabled
+    oneshot
+    seclabel u:r:init:s0
