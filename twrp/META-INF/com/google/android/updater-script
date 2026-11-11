@@ -1,0 +1,3 @@
+# deepd - real deep sleep for Amlogic Android TV boxes (Android 5-9, classic /system)
+ui_print(" ");
+ui_print("Install the zip from TWRP; all logic lives in update-binary.");

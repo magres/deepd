@@ -1,0 +1,31 @@
+#!/sbin/sh
+# deepd TWRP uninstaller: removes the three files and restores the CEC
+# setting from the backup made during install.
+
+export OUTFD=$2
+export ZIPFILE=$3
+
+ui_print() {
+    echo "ui_print $*" > /proc/self/fd/$OUTFD 2>/dev/null || echo "ui_print $*"
+    echo "ui_print" > /proc/self/fd/$OUTFD 2>/dev/null
+}
+
+mount /system 2>/dev/null || mount -o rw,remount /system 2>/dev/null
+mount /data 2>/dev/null
+
+SYS=/system
+[ -d "$SYS/etc" ] || SYS=/system_root/system
+
+ui_print "- removing deepd files..."
+rm -f "$SYS/bin/deepd.sh" "$SYS/etc/deepd.conf" "$SYS/etc/init/deepd.rc"
+
+SG=/data/system/users/0/settings_global.xml
+B="$SG.deepd.bak"
+if [ -f "$B" ]; then
+    ui_print "- restoring HDMI-CEC setting from backup..."
+    cp "$B" "$SG" && rm -f "$B"
+fi
+
+sync
+ui_print "- deepd removed. Reboot to system."
+exit 0

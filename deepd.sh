@@ -1,14 +1,19 @@
 #!/system/bin/sh
-# deepd — deep sleep for Amlogic Android TV box.
+# deepd — deep sleep for Amlogic Android TV boxes.  v0.2
 #
 # The firmware's sleep path leaves the SoC awake: on this class of
 # boxes "sleep" only suspends the display, USB and CEC (early suspend),
-# while the CPU stays live, the front panel keeps showing and adb/Wi-Fi
-# keep serving. This daemon waits for the Android framework to go
-# asleep on its own (CEC standby, power key, sleep timeout...) and then
-# triggers a real suspend-to-RAM: `echo mem > /sys/power/state`.
-# After the kernel resumes, it wakes the framework back with
-# KEYCODE_WAKEUP, so button / network / remote wakes always show the UI.
+# while the CPU stays live, the network and the front panel keep
+# serving. This daemon waits for the Android framework to go asleep
+# (CEC standby, power key, sleep timeout...), then triggers a real
+# suspend-to-RAM: `echo mem > /sys/power/state`. After the kernel
+# resumes, it wakes the framework back with KEYCODE_WAKEUP, so button /
+# network / remote wakes always show the UI.
+#
+# Privileges: on Amlogic BSP kernels /sys/power/state is owned by
+# group "system" (0660), so the init service runs as `user system` —
+# no root needed at runtime. On stricter builds where only uid 0 can
+# write the node, the write falls back to `su` when available.
 #
 # Optional "TV-off watchdog": if the box is awake while the TV reports
 # no HDMI signal (HPD down) for tv_off_grace seconds, put the framework
@@ -16,10 +21,11 @@
 # the box the moment TV power is toggled; disabled by default because
 # "TV is off" detection is TV-model-specific (HPD must actually drop).
 #
-# Runs as root from an init service (see deepd.rc). Optional settings
-# are read from /system/etc/deepd.conf; the daemon pauses while
+# Runs from an init service (see deepd.rc). Optional settings are read
+# from /system/etc/deepd.conf; the daemon pauses while
 # /data/local/tmp/deepd.pause exists.
 
+VERSION="0.2"
 LOG=/data/local/tmp/deepd.log
 CONF=/system/etc/deepd.conf
 PAUSE=/data/local/tmp/deepd.pause
@@ -60,9 +66,21 @@ hpd_state() {
     [ -n "$HPD" ] && [ -r "$HPD" ] && cat "$HPD" 2>/dev/null | tr -d '[:space:]'
 }
 
-log "start"
-log "mem available in /sys/power/state?"
+# put the SoC into suspend-to-RAM: direct write first (works when the
+# service runs as a user allowed to write /sys/power/state, e.g. system
+# uid on Amlogic BSP kernels), then fall back to su (strict builds
+# where only uid 0 can write the node)
+go_mem() {
+    echo mem > /sys/power/state 2>/dev/null && return 0
+    if command -v su >/dev/null 2>&1; then
+        su -c 'echo mem > /sys/power/state' 2>/dev/null && return 0
+    fi
+    return 1
+}
+
 grep -qw mem /sys/power/state 2>/dev/null || { log "no mem suspend support, exiting"; exit 1; }
+
+log "deepd v$VERSION start"
 log "grace=${GRACE}s cooldown=${COOLDOWN}s tv_off_grace=${TV_OFF_GRACE}s hpd=$HPD"
 
 cool_until=0
@@ -78,7 +96,10 @@ while :; do
             continue
         fi
         log "framework asleep -> suspend to mem"
-        echo mem > /sys/power/state 2>/dev/null
+        if ! go_mem; then
+            log "ERROR: cannot write /sys/power/state (tried direct and via su) - exiting"
+            exit 1
+        fi
         log "resumed"
         # wake the framework explicitly so button/network wakes show the UI
         input keyevent 224 2>/dev/null

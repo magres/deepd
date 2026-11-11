@@ -1,8 +1,12 @@
+# Runs deepd as system uid: on Amlogic BSP kernels /sys/power/state is
+# owned by group system (0660), so no root is needed at runtime. On
+# stricter builds deepd.sh itself falls back to `su` for the mem write.
 on property:sys.boot_completed=1
 	start deepd
 
 service deepd /system/bin/deepd.sh
     class main
+    user system
     disabled
     oneshot
     seclabel u:r:init:s0

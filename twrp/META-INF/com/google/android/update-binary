@@ -1,0 +1,74 @@
+#!/sbin/sh
+# deepd TWRP installer. Payload: deepd.sh, deepd.conf, deepd.rc next to
+# this script inside the zip. Target: Amlogic Android TV boxes with a
+# classic (non A/B) /system, Android 5-9-ish. Recovery has full access,
+# so no root and no adb are needed for the install itself.
+
+export OUTFD=$2
+export ZIPFILE=$3
+
+ui_print() {
+    echo "ui_print $*" > /proc/self/fd/$OUTFD 2>/dev/null || echo "ui_print $*"
+    echo "ui_print" > /proc/self/fd/$OUTFD 2>/dev/null
+}
+
+abort() {
+    ui_print "$1"
+    ui_print "Installation ABORTED."
+    exit 1
+}
+
+# ---- mount ----
+ui_print "- deepd: mounting /system and /data..."
+mount /system 2>/dev/null || mount -o rw,remount /system 2>/dev/null
+mount /data 2>/dev/null
+
+SYS=/system
+[ -d "$SYS/etc" ] || SYS=/system_root/system
+[ -d "$SYS/etc" ] || abort "! /system not mounted (A/B or unusual layout is not supported by this zip)"
+
+# writability test
+touch "$SYS/bin/.deepd_test" 2>/dev/null && rm -f "$SYS/bin/.deepd_test" || \
+    abort "! /system is read-only (verified boot / ro firmware?). This zip only works on writable /system."
+
+# ---- mem check ----
+grep -qw mem /sys/power/state 2>/dev/null || \
+    abort "! /sys/power/state has no 'mem': this kernel cannot suspend-to-RAM."
+
+# ---- payload ----
+P=/tmp/deepd-payload
+rm -rf "$P"; mkdir -p "$P"
+unzip -o "$ZIPFILE" "deepd.sh" "deepd.conf" "deepd.rc" -d "$P" >/dev/null 2>&1
+[ -f "$P/deepd.sh" ] && [ -f "$P/deepd.conf" ] && [ -f "$P/deepd.rc" ] || \
+    abort "! payload not found inside the zip (unzip failed or files missing)"
+
+ui_print "- copying deepd.sh / deepd.conf / deepd.rc ..."
+cp "$P/deepd.sh" "$SYS/bin/deepd.sh"        && chmod 0755 "$SYS/bin/deepd.sh" || abort "! cannot install /system/bin/deepd.sh"
+cp "$P/deepd.conf" "$SYS/etc/deepd.conf"    && chmod 0644 "$SYS/etc/deepd.conf" || abort "! cannot install /system/etc/deepd.conf"
+cp "$P/deepd.rc" "$SYS/etc/init/deepd.rc"   && chmod 0644 "$SYS/etc/init/deepd.rc" || abort "! cannot install /system/etc/init/deepd.rc"
+
+# ---- HDMI-CEC master switch (framework setting) ----
+CEC_DONE=no
+SG=/data/system/users/0/settings_global.xml
+if [ -f "$SG" ]; then
+    B="$SG.deepd.bak"
+    [ -f "$B" ] || cp "$SG" "$B" 2>/dev/null
+    if grep -q 'name="hdmi_control_enabled"' "$SG"; then
+        sed -i '/name="hdmi_control_enabled"/s/value="[^"]*"/value="1"/' "$SG" 2>/dev/null && CEC_DONE=yes
+    else
+        grep -v '</settings>' "$SG" > "$SG.tmp" 2>/dev/null
+        printf '    <setting id="970001" name="hdmi_control_enabled" value="1" />\n</settings>\n' >> "$SG.tmp"
+        mv "$SG.tmp" "$SG" 2>/dev/null && CEC_DONE=yes
+    fi
+fi
+case "$CEC_DONE" in
+    yes) ui_print "- HDMI-CEC enabled (backup: settings_global.xml.deepd.bak)" ;;
+    *)   ui_print "! /data unavailable: CEC not changed."
+         ui_print "  Sleep-on-TV needs hdmi_control_enabled=1."
+         ui_print "  Set it later via adb: settings put global hdmi_control_enabled 1" ;;
+esac
+
+sync
+ui_print "- Done. Reboot to system."
+ui_print "  Check: TV off -> box sleeps (deep); TV on -> ATV returns."
+exit 0

@@ -1,11 +1,12 @@
 # deepd — настоящий глубокий сон для Android TV приставок
 
-`deepd` — крошечный shell-демон (около 70 строк, без внешних зависимостей),
-который учит Android TV приставку **настояще спать**: прошивка сама
+`deepd` — крошечный shell-демон (около 100 строк, без внешних зависимостей),
+который учит Android TV приставку **настоящему сну**: прошивка сама
 «засыпает» лишь наполовину, а `deepd` доводит её до suspend-to-RAM.
 
-Ориентир — **Amlogic-приставки с root** (Tanix, T95, X96, Ugoos и т.п.),
-но механика обычная для любого Android 5+ с `mem` в `/sys/power/state`.
+Ориентир — **Amlogic-приставки с кастомной прошивкой** (Tanix, T95, X96,
+Ugoos и т.п.), но механика обычная для любого Android 5+ с `mem` в
+`/sys/power/state`.
 
 | | |
 | --- | --- |
@@ -27,14 +28,15 @@ PowerManagerService: Going to sleep ...        ← framework «уснул»
 /proc/uptime продолжает тикать                 ← ядро живёт, CPU работает
 ```
 
-Результат: ночью процессор веет/шумит впустую, сеть и передний дисплей
-тоже не отдыхают. Прошивка пропускает последний шаг —
+Результат: ночью процессор работает впустую (греет и шумит), сеть и
+передний дисплей тоже не отдыхают. Прошивка пропускает последний шаг —
 `echo mem > /sys/power/state`.
 
-Все проверки ниже — реальные замеры на TX92: во время глубокого сна сеть
-оступается (`adb` отвечает `No route to host`), после включения приставки
-ядро пишет пары `PM: suspend entry/exit`, а пробуждение по CEC фиксируется
-как `wakeup_reason:0x8`.
+deepd добавляет именно его. Все проверки ниже — реальные замеры на TX92:
+во время глубокого сна сеть отвалится (`adb` отвечает `No route to
+host`), после пробуждения ядро пишет пары `PM: suspend entry/exit`, а
+wake по CEC фиксируется как `wakeup_reason:0x8` (включая наш замер
+непрерывного сна ≈16 часов с ночи на утро).
 
 ## Как это работает
 
@@ -57,70 +59,142 @@ deepd: input keyevent 224 (KEYCODE_WAKEUP) + cooldown
    ATV снова на экране
 ```
 
-## Для домохозяйки: установка за 5 минут
+## Почему рут не всегда нужен
 
-**Что нужно заранее:**
+- **Установка через TWRP — вообще без root и без adb**: recovery имеет
+  полный доступ, копирует файлы и правит CEC-настройку. Плюс TWRP-зип
+  не трогает прошивку: только `/system/bin/deepd.sh`,
+  `/system/etc/deepd.conf`, `/system/etc/init/deepd.rc`.
+- **В работе** демон единственный раз в цикл пишет `mem` в
+  `/sys/power/state`. На Amlogic BSP-ядрах этот узел принадлежит группе
+  `system` (`-rw-rw---- system system`), поэтому служба запускается как
+  `user system` — **без root в рантайме**. На строгих сборках, где узел
+  доступен только uid 0, deepd сам пробует запись через `su` (если на
+  прошивке есть root) — если и это не выходит, аккуратно завершается
+  с пояснением в `/data/local/tmp/deepd.log`.
+- Вывод: «рут нужен» только как «на прошивке есть возможность записи в
+  /sys/power/state» — у большинства Amlogic-сборок это правда и без
+  root-прав в рантайме. У стоковых/брендовых прошивок root нет — deepd
+  там неприменим в принципе.
+
+## Артефакты релиза и куда они подходят
+
+На странице [Releases](https://github.com/magres/deepd/releases) для
+каждого тега `v*`:
+
+| артефакт | что это | кому подходит |
+| --- | --- | --- |
+| `deepd-twrp-install-amlogic-android5-9-vX.Y.Z.zip` | флешабельный zip | боксы **Amlogic с кастомной прошивкой Android 5–9** (классическая схема `/system`), у которых установлен TWRP/совместимый recovery. ПК не нужен |
+| `deepd-twrp-uninstall-amlogic-android5-9-vX.Y.Z.zip` | zip отката | те же боксы; снимает deepd и возвращает CEC-настройку |
+| `Source code (zip)` | исходники | путь «через adb с ПК» (любой бокса с root через adb) |
+
+Не подходят TWRP-зипам: стоковые прошивки с verified boot (`/system`
+только для чтения), Android 10+ / A/B / system-as-root (пока не
+поддерживаются), recovery отсутствует. Для шифрованного `/data` zip
+поставит файлы, но шаг включения CEC пропустит с предупреждением —
+включить CEC потом через adb.
+
+## Для домохозяйки: установка
+
+### Путь A — через TWRP (без ПК)
+
+Что нужно заранее:
+1. **root или доступный `su` на прошивке** не обязателен, но прошивка
+   должна позволять запись `/system` (кастомные сборки — ок);
+2. на приставке установлен **TWRP** (или совместимый recovery);
+3. знать, как попасть в recovery (обычно: выключить → нажать кнопку
+   сброса/при включении питания — у каждой модели по-своему).
+
+Шаги:
+1. Скачайте из Releases файл
+   `deepd-twrp-install-amlogic-android5-9-…zip` на флешку (FAT32).
+2. Загрузитесь в TWRP → **Install** → выберите zip → смахните
+   для подтверждения.
+3. Нажмите **Reboot to system**.
+4. Проверка: выключите ТВ — через 8–15 сек приставка уйдёт в настоящий
+   сон (дисплей тускнеет, сеть отвалится). Включите ТВ — ATV вернётся сам
+   за 5–25 секунд.
+
+Откат: flash `deepd-twrp-uninstall-…zip` той же процедурой.
+
+### Путь B — через adb с ПК
+
+Что нужно заранее:
 1. Приставка в сети (Wi-Fi или провод) и **включённый режим отладки
-   по ADB** (в разных прошивках: Настройки → «Об устройстве/Параметры
-   разработчика» → «Отладка по сети/USB» — включите).
-2. **Root на прошивке** (на кастомных сборках обычно уже включён;
-   на стоковых — часто нет, тогда deepd применить нельзя).
-3. Узнайте **IP-адрес приставки**: Настройки → Сеть (или список
-   устройств в роутере). Пример: `192.168.1.100`.
+   по ADB**.
+2. **root из adb** (`adb root` или `su` на прошивке).
+3. Узнайте IP приставки (Настройки → Сеть, или из роутера). Пример:
+   `192.168.1.100`.
 
-**Шаги:**
-
-1. **Скачайте platform-tools** (официальный adb от Google):
+Шаги:
+1. Скачайте platform-tools (официальный adb от Google):
    <https://developer.android.com/tools/releases/platform-tools> —
-   распакуйте архив; у вас появится папка `platform-tools`.
-2. **Скачайте последнюю версию deepd** — «Releases» здесь же на GitHub
-   (или «Code → Download ZIP»), распакуйте.
-3. **Установите:**
-   - **Windows:** распакованную папку `platform-tools` поместите внутрь
-     папки deepd; затем дважды щёлкните `scripts\install_windows.bat`,
-     нажмите `[1]`, введите IP приставки и ждите. Установщик скопирует
-     файлы, включит HDMI-CEC и перезагрузит приставку (1–2 минуты).
-   - **Linux/macOS:** если adb не в PATH — пропишите или подложите его
-     рядом (tooling/), затем: `./scripts/install.sh 192.168.1.100`.
-4. После перезагрузки проще всего проверить работу (шаг 5).
-5. **Проверка:** нажмите «вкл» на ТВ-пульте — экран гаснет, через 8–15 сек
-   приставка уходит в настоящий сон (передний дисплей тускнеет/гаснет,
-   сеть отвалится). Включите ТВ — ATV вернётся сам за 5–25 секунд.
+   распакуйте архив так, чтобы внутри была папка `platform-tools`.
+2. Скачайте последнюю версию deepd — «Releases» здесь же (или
+   «Code → Download ZIP»), распакуйте; для Windows положите папку
+   `platform-tools` внутрь папки deepd.
+3. Установите:
+   - **Windows:** дважды щёлкните `scripts\install_windows.bat`, нажмите
+     `[1]`, введите IP и ждите. Установщик скопирует файлы, включит
+     HDMI-CEC и перезагрузит приставку.
+   - **Linux/macOS:** `./scripts/install.sh 192.168.1.100`.
+4. После перезагрузки — проверка (шаг 5 из пути A).
 
 **«Если там написано…» — типовые ошибки**
 
 | Сообщение | Что это и что делать |
 | --- | --- |
-| «no root access» | Прошивка без root: deepd не заработает. Нужная прошивка с root или включение root в меню |
-| «adb not found» | platform-tools не там: распакуйте внутрь папки deepd (Windows) или добавьте в PATH |
-| «unable to connect» / «connection refused» | Приставка выключена/не в сети, или ADB-отладка отключена |
+| «no root access» | Прошивка без root: deepd не заработает (adb-путь). Попробуйте TWRP-путь |
+| «adb not found» | platform-tools не там: распакуйте внутрь папки deepd или добавьте в PATH |
+| «unable to connect» | Приставка выключена/не в сети, или ADB-отладка отключена |
 | «no mem suspend support» | Ядро не умеет suspend-to-RAM: устройство не подходит |
-| Сон не наступает | См. FAQ и «Диагностика» ниже |
+| «/system is read-only» (TWRP) | verified boot: zip на эту прошивку не годится |
+| «/data unavailable: CEC not changed» (TWRP) | файлы поставлены; включите CEC потом через adb |
+| Сон не наступает | См. FAQ и «Диагностика» |
+
+## Проверь свою коробку за 5 минут
+
+Не уверены в боксе? Прогоните этот чек-лист до установки (адб/терминал
+на приставке):
+
+1. root есть? `adb shell su -c 'id -u'` → должно быть `0`
+   (или `adb root` работает).
+2. Ядро умеет suspend? `cat /sys/power/state` → в списке должно быть
+   `mem`.
+3. CEC включён в framework? `settings get global hdmi_control_enabled` →
+   `1` (установщик включит сам, но проверить не мешает).
+4. Сон приходит? `dumpsys power | grep mWakefulness=` после выключения
+   ТВ → должно стать `Asleep` (если навсегда `Awake` — CEC/источника сна
+   нет, см. FAQ).
+5. Deep работает? После сна: `su -c "dmesg | grep 'PM: suspend'"` →
+   пара `entry/exit` означает настоящий suspend; пробуждение от ТВ:
+   `wakeup_reason:0x8` (Amlogic).
+
+Если все 5 шагов у вас зелёные — deepd будет работать.
 
 ## Это универсально? Пределы
 
-deepd — **универсальный механизм**, но у него три уровня успеха
-по «железу»:
-
 | Слой | Что нужно | Amlogic (проверено) | Другие SoC (RK/Realtek и др.) |
 | --- | --- | --- | --- |
-| root | доступ к `/system` и `/sys` | нужен | нужен |
+| запись /system | root или recovery | есть на кастомных прошивках | зависит |
 | suspend-to-RAM | `mem` в `/sys/power/state` | есть | обычно есть, но зависит от ядра |
-| сон от CEC | прошивочный HdmiControlService (`hdmi_control_enabled=1`, ставится автоматом) | да | зависит от прошивки |
-| **wake по CEC из deep** | поддержка в SoC/ядре (у Amlogic — AOCEC) | **да** (`wakeup_reason:0x8`) | часто **нет** — тогда будить пультом/кнопкой корпуса |
-| watchdog «ТВ выключен» | HPD гаснет при выключении ТВ (ТВ-специфика) | зависит от ТВ | выключен по умолчанию |
+| сон от CEC | `hdmi_control_enabled=1` | да (установщик включит) | зависит от прошивки |
+| запись `/sys/power/state` | узел доступен `system`-у (0660) или `su` | да (`system system` на BSP) | часто нужен root/su — есть fallback |
+| **wake по CEC из deep** | AOCEC (Amlogic) | **да** (`wakeup_reason:0x8`) | часто **нет** — будить пультом/кнопкой корпуса |
+| watchdog «ТВ выключен» | HPD гаснет при выключении ТВ | зависит от ТВ | выключен по умолчанию |
 
-Вывод: на **Amlogic** решение работает «из коробки»; на других SoC вход в
-сон работает, но пробуждение возможно пультом/кнопкой корпуса (ограничение
-железа, а не демона).
+Итого: **Amlogic-first**. На других SoC сон работает, пробуждение —
+через пульт или кнопку корпуса; отчитайтесь в issue (шаблон
+«Device report»), матрица совместимости пополняется.
 
 ## Частный случай: Tanix TX92 (slimBOXtv, Android 9)
 
-Что именно делает установщик на этой сборке:
+Что делает установщик на этой сборке:
 
 - включает framework-CEC: `settings put global hdmi_control_enabled 1`
   (в slimBOX он выключен по умолчанию; предыдущее значение сохраняется
-  в `/data/local/tmp/deepd-cec.bak` для отката);
+  в `/data/local/tmp/deepd-cec.bak`, TWRP-зип делает бэкап
+  `settings_global.xml.deepd.bak` и восстанавливает его при откате);
 - кладёт `/system/bin/deepd.sh`, `/system/etc/deepd.conf`,
   `/system/etc/init/deepd.rc` (стандартные пути; boot и прошивку не
   трогаем).
@@ -145,8 +219,8 @@ deepd — **универсальный механизм**, но у него тр
 | `hpd_state_path` | (пусто) | sysfs HPD-узел для watchdog (Amlogic: `/sys/class/amhdmitx/amhdmitx0/hpd_state`) |
 | `debug` | `0` | `1` — писать каждый тик watchdog в лог |
 
-Пауза на время обслуживания (чтобы долгие adb-работы при выключенном ТВ
-не мешали): `touch /data/local/tmp/deepd.pause`, снять: `rm`.
+Пауза на время обслуживания: `touch /data/local/tmp/deepd.pause`, снять:
+`rm`.
 
 ## Watchdog «ТВ выключен» (опционально)
 
@@ -168,7 +242,7 @@ cat /sys/class/extcon/hdmi_power/state   # HDMI=1 ТВ вкл, HDMI=0 выкл
 ## Диагностика
 
 - `/data/local/tmp/deepd.log` — журнал демона: `start`,
-  `framework asleep -> suspend to mem`, `resumed`;
+  `framework asleep -> suspend to mem`, `resumed`, ошибки записи;
 - `adb shell su -c "dmesg | grep -E 'suspend (entry|exit)|wakeup_reason'"` —
   был ли настоящий suspend и причина wake (`0x6` — ИК/кнопка, `0x8` — CEC);
 - `adb shell dumpsys power | grep mWakefulness=` — состояние framework;
@@ -176,13 +250,12 @@ cat /sys/class/extcon/hdmi_power/state   # HDMI=1 ТВ вкл, HDMI=0 выкл
 
 ## Откат
 
-```sh
-./scripts/install.sh 192.168.1.100 --uninstall   # Linux/macOS
-scripts\install_windows.bat                      # Windows: меню [0] UNINSTALL
-```
+- TWRP: flash `deepd-twrp-uninstall-…zip`.
+- adb: `./scripts/install.sh <ip> --uninstall` (или
+  `scripts\install_windows.bat` → `[0] UNINSTALL`).
 
 Удаляет три файла deepd и возвращает прежнее значение
-`hdmi_control_enabled`.
+`hdmi_control_enabled` (adb-путь) или восстанавливает бэкап XML (TWRP).
 
 ## English
 
@@ -190,17 +263,22 @@ scripts\install_windows.bat                      # Windows: меню [0] UNINSTA
 suspends the display, USB and CEC while the CPU stays awake. Once the
 framework is `Asleep`, the daemon writes `mem` to `/sys/power/state`
 (real suspend-to-RAM); after the kernel resumes it sends
-`KEYCODE_WAKEUP`, then waits `cooldown` seconds. Install: download
-platform-tools and this repo, then run `scripts\install_windows.bat`
-(Windows: menu `[1]`) or `./scripts/install.sh <ip>`. Root is required;
-`mem` in `/sys/power/state` is required (checked at start); the HDMI-CEC
-flag is flipped automatically and backed up for rollback. Verified on
-Tanix TX92 (Amlogic S912, Android 9): sleep by CEC Standby, wake by CEC
-(`wakeup_reason:0x8`), power button, RF/IR remotes. On other SoCs
-wake-on-CEC may be unavailable — wake via remote or case button.
-Options: `grace`, `cooldown`, optional `tv_off_grace` +
-`hpd_state_path` watchdog, `debug`; pause via
-`touch /data/local/tmp/deepd.pause`. Rollback: `--uninstall`.
+`KEYCODE_WAKEUP`, then waits `cooldown` seconds. On Amlogic BSP kernels
+`/sys/power/state` is writable by the `system` group, so the init service
+runs as `user system` — no runtime root; on stricter builds the write
+falls back to `su`. Install either by flashing
+`deepd-twrp-install-amlogic-android5-9-…zip` from TWRP recovery (no PC,
+no adb needed) or via `scripts/install.sh <ip>` / the Windows batch
+(needs adb root). The installer flips HDMI-CEC on
+(`hdmi_control_enabled=1`), backing up the old value for rollback.
+Verified on Tanix TX92 (Amlogic S912, Android 9): sleep by CEC Standby,
+wake by CEC (`wakeup_reason:0x8`), power button, RF/IR remotes, ≈16 h of
+continuous deep suspend. Not supported in v0.2: A/B / system-as-root,
+stock verified-boot firmwares. On other SoCs wake-on-CEC may be
+unavailable — wake via remote or case button. Options: `grace`,
+`cooldown`, optional `tv_off_grace` + `hpd_state_path` watchdog,
+`debug`; pause via `touch /data/local/tmp/deepd.pause`. Rollback:
+`deepd-twrp-uninstall-…zip` or `install.sh <ip> --uninstall`.
 
 ## FAQ
 
@@ -219,6 +297,9 @@ sleep может не работать: будите пультом/кнопко
 **Сеть пропала, хотя ничего не нажимал.** Это deep sleep — сеть
 недоступна до пробуждения. Если нужно поработать по adb при выключенном
 ТВ — поставьте паузу (`touch /data/local/tmp/deepd.pause`).
+
+**TWRP пишет «/system is read-only».** Прошивка с verified boot —
+установиться не даст; deepd на такую прошивку не применим.
 
 ## Лицензия
 

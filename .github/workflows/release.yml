@@ -1,0 +1,50 @@
+name: lint and release
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: shell syntax checks
+        run: |
+          set -e
+          for f in scripts/install.sh scripts/uninstall.sh; do
+            bash -n "$f" && echo "bash -n OK: $f"
+          done
+          for f in deepd.sh scripts/device-install.sh scripts/device-uninstall.sh \
+                   twrp/META-INF/com/google/android/update-binary \
+                   twrp/META-INF/com/google/android/uninstall-update-binary; do
+            sh -n "$f" && echo "sh -n OK: $f"
+          done
+      - name: build TWRP zips (sanity)
+        run: |
+          scripts/make-twrp.sh ci-test
+          unzip -t dist/*.zip
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: build TWRP zips
+        run: |
+          scripts/make-twrp.sh "${GITHUB_REF_NAME}"
+          unzip -t dist/*.zip
+      - name: create release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/*.zip \
+            --title "deepd $GITHUB_REF_NAME" \
+            --notes "Flash deepd-twrp-install-*.zip from TWRP recovery (Amlogic Android 5-9, classic /system). Uninstall with deepd-twrp-uninstall-*.zip. Alternative PC/adb path: see README (Code -> Download ZIP)."
